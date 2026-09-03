@@ -1,0 +1,24 @@
+# build output
+dist/
+*.tsbuildinfo
+
+# deps
+node_modules/
+.pnpm-store/
+
+# planning artifacts (local only, not versioned)
+.specs/
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# tooling caches
+coverage/
+.eslintcache
+.vitest/
+
+# os / editor
+.DS_Store
+*.log

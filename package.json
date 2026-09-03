@@ -1,0 +1,72 @@
+{
+	"name": "n8n-nodes-fabric-sql",
+	"version": "0.1.0",
+	"description": "n8n node to query a Microsoft Fabric SQL analytics endpoint (Lakehouse / Warehouse) with an Entra ID service principal.",
+	"license": "MIT",
+	"homepage": "https://github.com/JVVeiga/n8n-nodes-fabric-sql#readme",
+	"keywords": [
+		"n8n-community-node-package",
+		"n8n",
+		"fabric",
+		"microsoft-fabric",
+		"lakehouse",
+		"warehouse",
+		"sql",
+		"service-principal"
+	],
+	"author": {
+		"name": "João Veiga",
+		"email": "80075584+JVVeiga@users.noreply.github.com"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/JVVeiga/n8n-nodes-fabric-sql.git"
+	},
+	"bugs": {
+		"url": "https://github.com/JVVeiga/n8n-nodes-fabric-sql/issues"
+	},
+	"engines": {
+		"node": ">=20.15"
+	},
+	"scripts": {
+		"build": "n8n-node build",
+		"build:watch": "tsc --watch",
+		"dev": "n8n-node dev",
+		"lint": "n8n-node lint",
+		"lint:fix": "n8n-node lint --fix",
+		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage"
+	},
+	"files": [
+		"dist"
+	],
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"strict": true,
+		"credentials": [
+			"dist/credentials/FabricSqlApi.credentials.js"
+		],
+		"nodes": [
+			"dist/nodes/FabricSql/FabricSql.node.js"
+		]
+	},
+	"dependencies": {
+		"@azure/identity": "^4.13.0",
+		"mssql": "^12.7.0"
+	},
+	"peerDependencies": {
+		"n8n-workflow": "*"
+	},
+	"devDependencies": {
+		"@n8n/node-cli": "^0.46.2",
+		"@types/mssql": "^9.1.9",
+		"@types/node": "^20.19.0",
+		"eslint": "9.32.0",
+		"n8n-workflow": "^2.16.0",
+		"prettier": "3.6.2",
+		"typescript": "5.9.2",
+		"vitest": "^3.2.4"
+	}
+}
