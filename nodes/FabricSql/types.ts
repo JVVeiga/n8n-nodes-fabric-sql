@@ -94,6 +94,24 @@ export type OperationHandler = (
 	itemIndex: number,
 ) => Promise<INodeExecutionData[]>;
 
+/**
+ * An operation that consumes every input item at once.
+ *
+ * Insert and delete exist in this form because they aggregate: one statement covering 1000
+ * items instead of 1000 round trips, each of which costs a network hop to Fabric.
+ */
+export type BatchOperationHandler = (
+	ctx: IExecuteFunctions,
+	pool: PoolLike,
+	credentials: FabricSqlCredentials,
+	items: INodeExecutionData[],
+) => Promise<INodeExecutionData[]>;
+
+/** A registry entry, tagged with how it wants to be fed. */
+export type Operation =
+	| { kind: 'item'; run: OperationHandler }
+	| { kind: 'batch'; run: BatchOperationHandler };
+
 /** Result of the best-effort Fabric REST bootstrap. Never an exception. */
 export type WarmupOutcome = { ok: true } | { ok: false; detail: string };
 

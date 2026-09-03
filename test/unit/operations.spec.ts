@@ -16,7 +16,10 @@ describe('registry', () => {
 	});
 
 	it('resolves a known resource and operation', () => {
-		expect(resolveOperation('query', 'executeQuery')).toBe(executeQuery);
+		expect(resolveOperation('query', 'executeQuery')).toEqual({
+			kind: 'item',
+			run: executeQuery,
+		});
 	});
 
 	it('returns undefined for an unknown pair', () => {

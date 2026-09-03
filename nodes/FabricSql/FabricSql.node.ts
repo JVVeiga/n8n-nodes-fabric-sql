@@ -10,9 +10,9 @@ import { fabricSqlProperties } from './descriptions';
 import { fabricSqlConnectionTest } from './methods/credentialTest';
 import { searchTables } from './methods/listSearch';
 import { resolveOperation } from './operations';
+import { runOperation } from './operations/run';
 import { withPool } from './transport/connection';
 import { loadFabricSqlCredentials } from './transport/credentials';
-import { describeConnectionError, redact, toNodeError } from './transport/errors';
 
 export class FabricSql implements INodeType {
 	description: INodeTypeDescription = {
@@ -56,37 +56,21 @@ export class FabricSql implements INodeType {
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const resource = this.getNodeParameter('resource', 0) as string;
-		const operation = this.getNodeParameter('operation', 0) as string;
-		const handler = resolveOperation(resource, operation);
+		const operationName = this.getNodeParameter('operation', 0) as string;
+		const operation = resolveOperation(resource, operationName);
 
-		if (handler === undefined) {
+		if (operation === undefined) {
 			throw new NodeOperationError(
 				this.getNode(),
-				`The operation "${operation}" is not supported for the resource "${resource}".`,
+				`The operation "${operationName}" is not supported for the resource "${resource}".`,
 			);
 		}
 
 		const credentials = await loadFabricSqlCredentials(this);
-		const returnData: INodeExecutionData[] = [];
 
-		await withPool(credentials, async (pool) => {
-			for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
-				try {
-					returnData.push(...(await handler(this, pool, credentials, itemIndex)));
-				} catch (error) {
-					if (!this.continueOnFail()) {
-						throw toNodeError(this.getNode(), error, credentials, itemIndex);
-					}
-
-					const { message } = describeConnectionError(error, credentials);
-
-					returnData.push({
-						json: { error: redact(message, credentials.clientSecret) },
-						pairedItem: { item: itemIndex },
-					});
-				}
-			}
-		});
+		const returnData = await withPool(credentials, async (pool) =>
+			runOperation(this, pool, credentials, operation, items),
+		);
 
 		return [returnData];
 	}
