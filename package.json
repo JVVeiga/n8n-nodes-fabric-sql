@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-fabric-sql",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "n8n node to query a Microsoft Fabric SQL analytics endpoint (Lakehouse / Warehouse) with an Entra ID service principal.",
 	"license": "MIT",
 	"homepage": "https://github.com/JVVeiga/n8n-nodes-fabric-sql#readme",
