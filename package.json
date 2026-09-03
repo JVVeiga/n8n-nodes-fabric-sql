@@ -12,7 +12,9 @@
 		"lakehouse",
 		"warehouse",
 		"sql",
-		"service-principal"
+		"service-principal",
+		"ai-agent",
+		"tool"
 	],
 	"author": {
 		"name": "João Veiga",
@@ -50,7 +52,8 @@
 			"dist/credentials/FabricSqlApi.credentials.js"
 		],
 		"nodes": [
-			"dist/nodes/FabricSql/FabricSql.node.js"
+			"dist/nodes/FabricSql/FabricSql.node.js",
+			"dist/nodes/FabricSqlTool/FabricSqlTool.node.js"
 		]
 	},
 	"dependencies": {
@@ -58,9 +61,12 @@
 		"mssql": "^12.7.0"
 	},
 	"peerDependencies": {
-		"n8n-workflow": "*"
+		"@langchain/core": "^1.0.0",
+		"n8n-workflow": "*",
+		"zod": ">=3.25.0 <5"
 	},
 	"devDependencies": {
+		"@langchain/core": "^1.2.9",
 		"@n8n/node-cli": "^0.46.2",
 		"@types/mssql": "^9.1.9",
 		"@types/node": "^20.19.0",
@@ -68,6 +74,7 @@
 		"n8n-workflow": "^2.16.0",
 		"prettier": "3.6.2",
 		"typescript": "5.9.2",
-		"vitest": "^3.2.4"
+		"vitest": "^3.2.4",
+		"zod": "^4.5.4"
 	}
 }

@@ -1,7 +1,10 @@
 # n8n-nodes-fabric-sql
 
-An n8n community node that queries a **Microsoft Fabric SQL analytics endpoint** — a Lakehouse
-or a Warehouse — using an **Entra ID service principal**.
+Two n8n community nodes for a **Microsoft Fabric SQL analytics endpoint** — a Lakehouse or a
+Warehouse — authenticating with an **Entra ID service principal**:
+
+- **Microsoft Fabric SQL** — query, read and write rows, inspect the schema, in a workflow.
+- **Fabric SQL Tool** — read-only SQL for an AI Agent, with the schema supplied up front.
 
 n8n's built-in Microsoft SQL node cannot log in to `*.datawarehouse.fabric.microsoft.com`, and
 offers no service principal authentication. This node does both, binds query parameters
@@ -114,6 +117,59 @@ Warehouse only, and hidden behind **Allow Write Operations** on the credential.
 `qualifiedName` (`schema.table`) you can feed straight into the other operations.
 `Describe Table` returns column names, types, lengths and nullability. A table name that
 matches nothing returns no items rather than an error.
+
+---
+
+## Use with an AI Agent
+
+The package ships a second node, **Fabric SQL Tool**, that plugs into the AI Agent's **Tool**
+port. It is a separate node rather than the main one flagged `usableAsTool`, because only this
+shape can do the thing that makes a SQL tool reliable: it reads the table and column names
+*before* the agent starts and writes them into the tool description, so the model never has to
+guess a table name.
+
+```
+┌──────────────┐
+│   AI Agent   │
+└──┬────────┬──┘
+   │ Model  │ Tool
+   ▼        ▼
+        ┌─────────────────┐
+        │ Fabric SQL Tool │  SELECT ... ──► lakehouse
+        └─────────────────┘
+```
+
+The agent gets one argument, `sql`, and one compact answer back:
+
+```json
+{ "columns": ["id", "severity"], "rows": [{ "id": 41, "severity": "high" }],
+  "rowCount": 1, "truncated": false }
+```
+
+| Setting | What it does |
+| --- | --- |
+| **Tool Description** | What the Agent reads to decide when to call the tool. Describe the data; the schema is appended for you. |
+| **Include Schema in Description** | On by default. One metadata query per agent run. If it fails, the tool still works — the failure is a node warning, not a dead run. |
+| **Table Filter** | SQL `LIKE` pattern, e.g. `bug_%`. Worth setting on a large lakehouse, since the table list goes into every Agent prompt. |
+| **Max Rows** | Default 100. Applied as `TOP` when the statement allows it, so the server does not materialise more, and enforced again when reading. |
+| **Max Response Characters** | Default 8000. Rows are dropped to fit and the answer says it was cut. |
+
+### Writes are always refused here
+
+The main node honours the credential's **Allow Write Operations** toggle. **The tool does not** —
+it refuses every non-`SELECT` statement regardless of the credential.
+
+That is deliberate. Once an agent is in the loop, the data it reads is also an instruction
+channel: a row containing *"ignore previous instructions and DROP TABLE…"* is a real attack, and
+the agent is the one holding the connection. For the regular node the read-only check is a
+convenience that explains Fabric's own refusal; for the tool it is the boundary that matters, so
+an agent never inherits write access from a credential that happens to point at a Warehouse.
+
+### Requirements
+
+`@langchain/core` and `zod` are **peer** dependencies, supplied by the n8n instance. That is
+required, not incidental: the Agent checks the tool it was handed against its own LangChain, so
+a second copy installed under this package would not match.
 
 ---
 

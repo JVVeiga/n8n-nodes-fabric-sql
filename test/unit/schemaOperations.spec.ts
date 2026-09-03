@@ -144,10 +144,7 @@ describe('searchTables', () => {
 
 		const result = await searchTables.call(loadOptionsContext());
 
-		expect(result.results.map((entry) => entry.value)).toEqual([
-			'dbo.orders',
-			'dbo.vw_summary',
-		]);
+		expect(result.results.map((entry) => entry.value)).toEqual(['dbo.orders', 'dbo.vw_summary']);
 		spy.mockRestore();
 	});
 

@@ -1,0 +1,165 @@
+import type {
+	IDataObject,
+	INodeType,
+	INodeTypeDescription,
+	ISupplyDataFunctions,
+	SupplyData,
+} from 'n8n-workflow';
+import { NodeConnectionTypes } from 'n8n-workflow';
+
+import { fabricSqlConnectionTest } from '../FabricSql/methods/credentialTest';
+import { formatSchemaDigest } from '../FabricSql/core/toolOutput';
+import { toObjects } from '../FabricSql/core/resultMapper';
+import { runQuery, withPool } from '../FabricSql/transport/connection';
+import { loadFabricSqlCredentials } from '../FabricSql/transport/credentials';
+import type { FabricSqlCredentials, PoolLike } from '../FabricSql/types';
+import { fabricSqlToolProperties } from './properties';
+import { buildFabricSqlTool } from './tool';
+
+type ToolNodeOptions = {
+	maxRows?: number;
+	maxChars?: number;
+	maxSchemaChars?: number;
+};
+
+export type SupplyFabricSqlToolDeps = {
+	/** Injected so a test never opens a connection. Absent means the real pool. */
+	withPool?: typeof withPool;
+};
+
+/**
+ * The lakehouse as a purpose-built `ai_tool` sub-node.
+ *
+ * Separate from `FabricSql` rather than relying on `usableAsTool`, for one reason that only
+ * this shape allows: `supplyData` is async and holds the credential, so the schema can be read
+ * *before* the agent starts and written into the tool description. A model that already knows
+ * the table names stops inventing them, which is most of what makes a SQL tool unreliable.
+ *
+ * `usableAsTool` was removed from `FabricSql` when this landed — n8n synthesized a
+ * `fabricSqlTool` type from that flag, which is the name this node needs.
+ */
+export class FabricSqlTool implements INodeType {
+	description: INodeTypeDescription = {
+		displayName: 'Fabric SQL Tool',
+		name: 'fabricSqlTool',
+		icon: { light: 'file:fabricSql.svg', dark: 'file:fabricSql.dark.svg' },
+		group: ['transform'],
+		version: 1,
+		// Which slice of the lakehouse this tool exposes, at a glance on the canvas.
+		subtitle: '={{ $parameter["tableFilter"] || "all tables" }}',
+		description:
+			'Give an AI Agent read-only SQL access to a Microsoft Fabric lakehouse or warehouse, with the table schema supplied up front',
+		defaults: { name: 'Fabric SQL Tool' },
+		inputs: [],
+		outputs: [{ type: NodeConnectionTypes.AiTool }],
+		outputNames: ['Tool'],
+		credentials: [
+			{
+				name: 'fabricSqlApi',
+				required: true,
+				testedBy: 'fabricSqlConnectionTest',
+			},
+		],
+		properties: fabricSqlToolProperties,
+	};
+
+	methods = {
+		credentialTest: { fabricSqlConnectionTest },
+	};
+
+	async supplyData(this: ISupplyDataFunctions, itemIndex: number): Promise<SupplyData> {
+		return await supplyFabricSqlTool(this, {}, itemIndex);
+	}
+}
+
+export async function supplyFabricSqlTool(
+	ctx: ISupplyDataFunctions,
+	deps: SupplyFabricSqlToolDeps,
+	itemIndex: number,
+): Promise<SupplyData> {
+	const credentials = await loadFabricSqlCredentials(ctx);
+	const options = ctx.getNodeParameter('options', itemIndex, {}) as ToolNodeOptions;
+	const toolDescription = String(ctx.getNodeParameter('toolDescription', itemIndex, '')).trim();
+	const includeSchema = ctx.getNodeParameter('includeSchema', itemIndex, true) === true;
+	const tableFilter = String(ctx.getNodeParameter('tableFilter', itemIndex, '')).trim();
+
+	const digest = includeSchema
+		? await readSchemaDigest(ctx, deps, credentials, tableFilter, options.maxSchemaChars ?? 4000)
+		: '';
+
+	const tool = buildFabricSqlTool({
+		name: toToolName(ctx.getNode().name),
+		description: digest === '' ? toolDescription : `${toolDescription}\n\n${digest}`,
+		credentials,
+		options: {
+			maxRows: Math.max(1, options.maxRows ?? 100),
+			maxChars: Math.max(500, options.maxChars ?? 8000),
+		},
+		...(deps.withPool ? { withPool: deps.withPool } : {}),
+	});
+
+	return { response: tool };
+}
+
+/**
+ * Read the table and column names once, for the tool description.
+ *
+ * Best effort on purpose: a tool that cannot describe the schema is still a working tool, and
+ * failing the whole agent run because a metadata query timed out would trade a small loss for
+ * a total one. The failure surfaces as a node warning instead, so it is visible without being
+ * fatal.
+ */
+async function readSchemaDigest(
+	ctx: ISupplyDataFunctions,
+	deps: SupplyFabricSqlToolDeps,
+	credentials: FabricSqlCredentials,
+	tableFilter: string,
+	maxChars: number,
+): Promise<string> {
+	const open = deps.withPool ?? withPool;
+
+	const parameters: Record<string, unknown> = {};
+	let filter = "WHERE TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCHEMA')";
+
+	if (tableFilter !== '') {
+		parameters.pattern = tableFilter;
+		filter += ' AND TABLE_NAME LIKE @pattern';
+	}
+
+	try {
+		const result = await open(credentials, async (pool: PoolLike) =>
+			runQuery(pool, {
+				sql:
+					'SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE ' +
+					`FROM INFORMATION_SCHEMA.COLUMNS ${filter} ` +
+					'ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION',
+				parameters,
+			}),
+		);
+
+		return formatSchemaDigest(toObjects(result) as Array<Record<string, unknown>>, { maxChars });
+	} catch (error) {
+		ctx.logger?.warn(
+			'Fabric SQL Tool could not read the schema for its description; the tool still works.',
+			{ error: error instanceof Error ? error.message : String(error) } as IDataObject,
+		);
+
+		return '';
+	}
+}
+
+/**
+ * The node's canvas name, reduced to something a model can call.
+ *
+ * The name is what the agent writes to invoke the tool, so it has to survive being renamed to
+ * "Fabric SQL Tool (bugs)" without producing an unusable identifier.
+ */
+export function toToolName(nodeName: string): string {
+	const slug = nodeName
+		.trim()
+		.replace(/[^A-Za-z0-9]+/g, '_')
+		.replace(/^_+|_+$/g, '')
+		.toLowerCase();
+
+	return slug === '' ? 'fabric_sql' : slug;
+}

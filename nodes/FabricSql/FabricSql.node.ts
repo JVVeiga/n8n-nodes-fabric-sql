@@ -27,7 +27,6 @@ export class FabricSql implements INodeType {
 		defaults: { name: 'Microsoft Fabric SQL' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
-		usableAsTool: true,
 		credentials: [
 			{
 				// Spelled out rather than referencing CREDENTIAL_NAME: the community-node lint

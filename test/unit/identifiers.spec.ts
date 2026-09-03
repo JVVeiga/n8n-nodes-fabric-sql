@@ -65,9 +65,7 @@ describe('quoteQualifiedName', () => {
 	});
 
 	it('quotes a three-part name', () => {
-		expect(quoteQualifiedName('my_lakehouse.dbo.orders')).toBe(
-			'[my_lakehouse].[dbo].[orders]',
-		);
+		expect(quoteQualifiedName('my_lakehouse.dbo.orders')).toBe('[my_lakehouse].[dbo].[orders]');
 	});
 
 	it('normalizes a pre-bracketed qualified name', () => {
