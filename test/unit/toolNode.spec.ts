@@ -7,6 +7,7 @@ import {
 	toToolName,
 } from '../../nodes/FabricSqlTool/FabricSqlTool.node';
 import { FABRIC_SQL_TOOL_SCHEMA, buildFabricSqlTool } from '../../nodes/FabricSqlTool/tool';
+import type { ToolRunLog } from '../../nodes/FabricSqlTool/toolRunLog';
 import type { FabricSqlCredentials, PoolLike } from '../../nodes/FabricSql/types';
 import { recordingPool, rowsResult, testCredentials, testNode } from '../helpers/context';
 
@@ -350,5 +351,118 @@ describe('toToolName', () => {
 
 	it('falls back when the name has nothing usable', () => {
 		expect(toToolName('!!!')).toBe('fabric_sql');
+	});
+});
+
+describe('canvas visibility', () => {
+	function fakeLog() {
+		const started: Array<Record<string, unknown>> = [];
+		const ended: Array<Record<string, unknown>> = [];
+		const errored: unknown[] = [];
+		const log: ToolRunLog = {
+			start: (payload) => {
+				started.push(payload);
+				return started.length - 1;
+			},
+			end: (_index, payload) => {
+				ended.push(payload);
+			},
+			error: (_index, error) => {
+				errored.push(error);
+			},
+		};
+
+		return { log, started, ended, errored };
+	}
+
+	it('registers the call and the result, so the node does not look untouched', async () => {
+		// Without this the tool answers the agent correctly and leaves no trace in the
+		// execution — which is most of what you need when an agent reaches a wrong conclusion.
+		const { withPool } = fakeWithPool(rowsResult(['id'], [[1]]));
+		const { log, started, ended } = fakeLog();
+		const built = buildFabricSqlTool({
+			name: 'fabric',
+			description: 'd',
+			credentials: testCredentials,
+			options: { maxRows: 10, maxChars: 8000 },
+			withPool,
+			log,
+		});
+
+		await callTool(built, 'SELECT id FROM t');
+
+		expect(started).toEqual([{ sql: 'SELECT id FROM t' }]);
+		expect(ended).toHaveLength(1);
+		expect(ended[0]).toMatchObject({ rowCount: 1, truncated: false });
+	});
+
+	it('logs the SQL actually executed, not the SQL asked for', async () => {
+		const { withPool } = fakeWithPool(rowsResult(['id'], [[1]]));
+		const { log, ended } = fakeLog();
+		const built = buildFabricSqlTool({
+			name: 'fabric',
+			description: 'd',
+			credentials: testCredentials,
+			options: { maxRows: 10, maxChars: 8000 },
+			withPool,
+			log,
+		});
+
+		await callTool(built, 'SELECT id FROM t');
+
+		expect(ended[0].executedSql).toBe('SELECT TOP (10) id FROM t');
+	});
+
+	it('closes a failed call as failed rather than leaving it open', async () => {
+		const failing = vi.fn(async () => {
+			throw Object.assign(new Error('nope'), { code: 'ESOCKET' });
+		});
+		const { log, started, errored } = fakeLog();
+		const built = buildFabricSqlTool({
+			name: 'fabric',
+			description: 'd',
+			credentials: testCredentials,
+			options: { maxRows: 10, maxChars: 8000 },
+			withPool: failing as unknown as never,
+			log,
+		});
+
+		const answer = await callTool(built, 'SELECT 1');
+
+		expect(started).toHaveLength(1);
+		expect(errored).toHaveLength(1);
+		// The model still gets text — a failed lookup is not a reason to kill the run.
+		expect(answer).toMatch(/^Query failed: /);
+	});
+
+	it('still registers a call the guard rejects', async () => {
+		const { withPool } = fakeWithPool();
+		const { log, started, ended } = fakeLog();
+		const built = buildFabricSqlTool({
+			name: 'fabric',
+			description: 'd',
+			credentials: testCredentials,
+			options: { maxRows: 10, maxChars: 8000 },
+			withPool,
+			log,
+		});
+
+		await callTool(built, 'DELETE FROM t');
+
+		expect(started).toHaveLength(1);
+		expect(String(ended[0].response)).toMatch(/DELETE is not allowed/);
+	});
+
+	it('works with no logger at all', async () => {
+		const { withPool } = fakeWithPool(rowsResult(['id'], [[1]]));
+		const built = buildFabricSqlTool({
+			name: 'fabric',
+			description: 'd',
+			credentials: testCredentials,
+			options: { maxRows: 10, maxChars: 8000 },
+			withPool,
+		});
+
+		expect(JSON.parse(await callTool(built, 'SELECT id FROM t')).rowCount).toBe(1);
 	});
 });

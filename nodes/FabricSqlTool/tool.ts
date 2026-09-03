@@ -6,6 +6,7 @@ import { applyRowCap, compactResult } from '../FabricSql/core/toolOutput';
 import { runQuery, withPool } from '../FabricSql/transport/connection';
 import { describeConnectionError, redact } from '../FabricSql/transport/errors';
 import type { FabricSqlCredentials, PoolLike, QueryResultLike } from '../FabricSql/types';
+import type { ToolRunLog } from './toolRunLog';
 
 /**
  * The lakehouse as a single-argument agent tool: SQL in, one compact JSON answer out.
@@ -37,6 +38,8 @@ export type FabricSqlToolDeps = {
 	options: FabricSqlToolOptions;
 	/** Injected so tests never open a connection. Absent means the real pool. */
 	withPool?: typeof withPool;
+	/** Registers each call under the node on the canvas. Absent means the call is not logged. */
+	log?: ToolRunLog;
 };
 
 /** One required argument, as JSON Schema — the shape a model fills most reliably. */
@@ -61,34 +64,54 @@ export function buildFabricSqlTool(deps: FabricSqlToolDeps): DynamicStructuredTo
 		schema: FABRIC_SQL_TOOL_SCHEMA as unknown as ToolSchemaBase,
 		func: async (input: unknown): Promise<string> => {
 			const sql = String((input as { sql?: unknown })?.sql ?? '').trim();
+			// Opened before the guard runs, so a rejected write is still a visible call rather
+			// than a silent no-op on the canvas.
+			const logIndex = deps.log?.start({ sql });
+			const done = (text: string): string => {
+				if (logIndex !== undefined) deps.log?.end(logIndex, { response: text });
+				return text;
+			};
 
 			if (sql === '') {
-				return 'No SQL was provided. Send a SELECT statement in the "sql" argument.';
+				return done('No SQL was provided. Send a SELECT statement in the "sql" argument.');
 			}
 
 			try {
 				assertReadOnly(sql);
 			} catch (error) {
 				// The guard's own message already names the keyword and the reason.
-				return describeConnectionError(error, deps.credentials).message;
+				return done(describeConnectionError(error, deps.credentials).message);
 			}
 
+			const capped = applyRowCap(sql, deps.options.maxRows);
+
 			try {
-				const capped = applyRowCap(sql, deps.options.maxRows);
 				const result = await open(deps.credentials, async (pool: PoolLike) =>
 					runQuery(pool, { sql: capped, parameters: {} }),
 				);
 
-				return JSON.stringify(
-					compactResult(result as QueryResultLike, toObjects(result as QueryResultLike), {
-						maxRows: deps.options.maxRows,
-						maxChars: deps.options.maxChars,
-					}),
+				const compact = compactResult(
+					result as QueryResultLike,
+					toObjects(result as QueryResultLike),
+					{ maxRows: deps.options.maxRows, maxChars: deps.options.maxChars },
 				);
+
+				if (logIndex !== undefined) {
+					// The executed SQL, not the SQL asked for — the row cap rewrites it, and the
+					// difference is the first thing you check when a result looks short.
+					deps.log?.end(logIndex, { executedSql: capped, ...compact });
+				}
+
+				return JSON.stringify(compact);
 			} catch (error) {
 				const described = describeConnectionError(error, deps.credentials);
+				const message = redact(`Query failed: ${described.message}`, deps.credentials.clientSecret);
 
-				return redact(`Query failed: ${described.message}`, deps.credentials.clientSecret);
+				// Closed as an error, so the canvas shows a failed call instead of one that
+				// never came back. The model still receives text — see the module comment.
+				if (logIndex !== undefined) deps.log?.error(logIndex, error);
+
+				return message;
 			}
 		},
 	});

@@ -94,8 +94,8 @@ describe('describeConnectionError — authorization', () => {
 	});
 });
 
-describe('describeConnectionError — reachability', () => {
-	it.each(['ESOCKET', 'ETIMEOUT', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', 'EHOSTUNREACH'])(
+describe('describeConnectionError — host never reached', () => {
+	it.each(['ETIMEOUT', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', 'EHOSTUNREACH'])(
 		'explains %s as a port or host problem',
 		(code) => {
 			const described = describeConnectionError(driverError('Failed', code), context);
@@ -107,10 +107,44 @@ describe('describeConnectionError — reachability', () => {
 		},
 	);
 
-	it('matches a socket hang up by message when there is no code', () => {
+	it('matches a DNS failure by message when there is no code', () => {
 		expect(
-			describeConnectionError(driverError('Connection lost - socket hang up'), context).message,
+			describeConnectionError(driverError('getaddrinfo ENOTFOUND abc'), context).message,
 		).toContain('Could not reach');
+	});
+});
+
+describe('describeConnectionError — connection cut mid-handshake', () => {
+	// A socket that opens and is then closed looks identical whether a firewall cut it or the
+	// driver is too old for Fabric. Blaming the firewall alone sends people to the wrong team.
+	it.each(['ESOCKET', 'ECONNRESET'])('names both causes for %s', (code) => {
+		const described = describeConnectionError(driverError('Failed', code), context);
+
+		expect(described.message).toContain('established and then');
+		expect(described.message).toContain('firewall or proxy');
+		expect(described.message).toContain('tedious 19.2.1');
+	});
+
+	it('reports the tedious version actually resolved, so it can be compared', () => {
+		const described = describeConnectionError(driverError('Failed', 'ESOCKET'), context);
+
+		expect(described.message).toMatch(/resolved tedious \d+\.\d+\.\d+/);
+	});
+
+	it('matches a socket hang up by message when there is no code', () => {
+		const described = describeConnectionError(
+			driverError('Connection lost - socket hang up'),
+			context,
+		);
+
+		expect(described.message).toContain('established and then');
+		expect(described.message).not.toContain('Could not reach');
+	});
+
+	it('does not claim the host was unreachable, which it was not', () => {
+		expect(describeConnectionError(driverError('Failed', 'ESOCKET'), context).message).not.toMatch(
+			/^Could not reach/,
+		);
 	});
 });
 

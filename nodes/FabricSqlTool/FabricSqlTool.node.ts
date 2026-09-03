@@ -14,6 +14,7 @@ import { runQuery, withPool } from '../FabricSql/transport/connection';
 import { loadFabricSqlCredentials } from '../FabricSql/transport/credentials';
 import type { FabricSqlCredentials, PoolLike } from '../FabricSql/types';
 import { fabricSqlToolProperties } from './properties';
+import { toolRunLog } from './toolRunLog';
 import { buildFabricSqlTool } from './tool';
 
 type ToolNodeOptions = {
@@ -95,6 +96,7 @@ export async function supplyFabricSqlTool(
 			maxRows: Math.max(1, options.maxRows ?? 100),
 			maxChars: Math.max(500, options.maxChars ?? 8000),
 		},
+		log: toolRunLog(ctx),
 		...(deps.withPool ? { withPool: deps.withPool } : {}),
 	});
 

@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+
 import type { INode } from 'n8n-workflow';
 import { NodeOperationError } from 'n8n-workflow';
 
@@ -132,6 +134,22 @@ function classify(
 		};
 	}
 
+	// Deliberately NOT folded into the message above. A connection that opens and is then cut
+	// has two very different causes that look identical here: egress being dropped, and the
+	// Fabric LOGIN7 handshake that tedious only fixed in 19.2.1. Saying "open port 1433" when
+	// the real cause is the driver sends people to the wrong team for an afternoon, which is
+	// the exact failure this node exists to prevent — so both are named, with the version.
+	if (isConnectionCut(code, raw)) {
+		return {
+			message:
+				`The connection to ${context.server ?? 'the server'}:1433 was established and then ` +
+				'dropped. Two causes look the same here. Either outbound TCP 1433 is being cut by a ' +
+				'firewall or proxy, or the TDS driver is too old for Fabric — the handshake fix landed ' +
+				`in tedious 19.2.1, and this install resolved ${tediousVersion()}. Check the driver ` +
+				'version first: it is the faster of the two to rule out.',
+		};
+	}
+
 	if (/read[- ]only/i.test(raw)) {
 		return {
 			message:
@@ -144,14 +162,43 @@ function classify(
 	return undefined;
 }
 
+/** The host was never reached: no DNS, refused, no route, or nothing answered at all. */
 function isUnreachable(code: string | undefined, raw: string): boolean {
-	const codes = ['ESOCKET', 'ETIMEOUT', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', 'EHOSTUNREACH'];
+	const codes = ['ETIMEOUT', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', 'EHOSTUNREACH'];
 
 	if (code !== undefined && codes.includes(code)) {
 		return true;
 	}
 
-	return /socket hang up|failed to connect|getaddrinfo|connection timeout/i.test(raw);
+	return /getaddrinfo|failed to connect|connection timeout/i.test(raw);
+}
+
+/** A socket that opened and was then closed mid-handshake — driver or network, unknowable here. */
+function isConnectionCut(code: string | undefined, raw: string): boolean {
+	if (code !== undefined && ['ESOCKET', 'ECONNRESET'].includes(code)) {
+		return true;
+	}
+
+	return /socket hang up|connection lost|read ECONNRESET/i.test(raw);
+}
+
+/**
+ * The `tedious` version actually resolved at runtime.
+ *
+ * Read defensively: this runs inside error handling, where throwing would replace a useful
+ * message with a useless one. `mssql` declares the dependency, so it is normally present.
+ */
+function tediousVersion(): string {
+	try {
+		// createRequire, not a static import: the lookup has to be optional and happen at error
+		// time. A static `import` of a transitive dependency would fail module load if it were
+		// ever absent, replacing every error message with a crash.
+		const pkg = createRequire(__filename)('tedious/package.json') as { version?: string };
+
+		return pkg.version ? `tedious ${pkg.version}` : 'an unknown tedious version';
+	} catch {
+		return 'an unknown tedious version';
+	}
 }
 
 /**
