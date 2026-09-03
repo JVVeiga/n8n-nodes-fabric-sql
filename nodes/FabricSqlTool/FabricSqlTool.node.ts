@@ -137,7 +137,10 @@ async function readSchemaDigest(
 			}),
 		);
 
-		return formatSchemaDigest(toObjects(result) as Array<Record<string, unknown>>, { maxChars });
+		return formatSchemaDigest(toObjects(result) as Array<Record<string, unknown>>, {
+			maxChars,
+			...(tableFilter === '' ? {} : { tableFilter }),
+		});
 	} catch (error) {
 		ctx.logger?.warn(
 			'Fabric SQL Tool could not read the schema for its description; the tool still works.',

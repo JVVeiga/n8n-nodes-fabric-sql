@@ -250,6 +250,32 @@ describe('supplyFabricSqlTool', () => {
 		expect(calls[0].parameters).toEqual({ pattern: 'bug_%' });
 	});
 
+	it('tells the model the list is partial when a filter is set', async () => {
+		// The filter is applied when the description is built, before any model turn, so the
+		// model cannot ask about it — it has to be told, or it treats the subset as everything.
+		const { withPool } = fakeWithPool(schemaRows);
+		const { ctx } = supplyContext({
+			toolDescription: 'Bug data.',
+			includeSchema: true,
+			tableFilter: 'bug_%',
+		});
+
+		const supplied = await supplyFabricSqlTool(ctx, { withPool }, 0);
+		const description = (supplied.response as { description: string }).description;
+
+		expect(description).toContain('only tables matching "bug_%" are listed');
+		expect(description).toContain('INFORMATION_SCHEMA.TABLES');
+	});
+
+	it('claims no partiality when no filter is set', async () => {
+		const { withPool } = fakeWithPool(schemaRows);
+		const { ctx } = supplyContext({ toolDescription: 'Bug data.', includeSchema: true });
+
+		const supplied = await supplyFabricSqlTool(ctx, { withPool }, 0);
+
+		expect((supplied.response as { description: string }).description).not.toMatch(/partial list/);
+	});
+
 	it('excludes system schemas', async () => {
 		const { withPool, calls } = fakeWithPool(schemaRows);
 		const { ctx } = supplyContext({ toolDescription: 'd', includeSchema: true });

@@ -110,7 +110,7 @@ export function compactResult(
  */
 export function formatSchemaDigest(
 	columns: Array<Record<string, unknown>>,
-	options: { maxChars: number },
+	options: { maxChars: number; tableFilter?: string },
 ): string {
 	const byTable = new Map<string, string[]>();
 
@@ -154,10 +154,26 @@ export function formatSchemaDigest(
 	}
 
 	const header = 'Available tables and columns:';
+
+	// A list that is not the whole database MUST say so. Silently handing a model a filtered
+	// subset makes it conclude the missing data does not exist — it has no way to tell a
+	// deliberately narrowed list from a complete one, and it answers with full confidence
+	// either way. Both causes of narrowing get named, and both point at the way out: the
+	// tool's own `sql` argument can read INFORMATION_SCHEMA.
+	const notes: string[] = [];
+
+	if (options.tableFilter) {
+		notes.push(`only tables matching "${options.tableFilter}" are listed`);
+	}
+
+	if (omitted > 0) {
+		notes.push(`${omitted} more table${omitted === 1 ? '' : 's'} did not fit`);
+	}
+
 	const footer =
-		omitted > 0
-			? `\n(${omitted} more table${omitted === 1 ? '' : 's'} not listed — query ` +
-				'INFORMATION_SCHEMA.TABLES to see them.)'
+		notes.length > 0
+			? `\n(This is a partial list — ${notes.join(', and ')}. Query ` +
+				'INFORMATION_SCHEMA.TABLES to discover the rest.)'
 			: '';
 
 	return `${header}\n${lines.join('\n')}${footer}`;

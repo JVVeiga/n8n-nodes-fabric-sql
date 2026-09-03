@@ -174,6 +174,12 @@ describe('formatSchemaDigest', () => {
 		expect(formatSchemaDigest([], { maxChars: 10_000 })).toBe('');
 	});
 
+	it('says nothing about partiality when the list is complete', () => {
+		const digest = formatSchemaDigest(columns, { maxChars: 10_000 });
+
+		expect(digest).not.toMatch(/partial list/);
+	});
+
 	it('drops tables past the budget and points at INFORMATION_SCHEMA', () => {
 		const many = Array.from({ length: 200 }, (_unused, index) => ({
 			TABLE_SCHEMA: 'dbo',
@@ -184,8 +190,33 @@ describe('formatSchemaDigest', () => {
 
 		const digest = formatSchemaDigest(many, { maxChars: 300 });
 
-		expect(digest).toMatch(/more tables not listed/);
+		expect(digest).toMatch(/partial list/);
+		expect(digest).toMatch(/did not fit/);
 		expect(digest).toContain('INFORMATION_SCHEMA.TABLES');
+	});
+
+	it('warns that a filter narrowed the list, even when everything listed fits', () => {
+		// Without this the model cannot tell a deliberately filtered list from a complete one,
+		// and concludes the tables it cannot see do not exist.
+		const digest = formatSchemaDigest(columns, { maxChars: 10_000, tableFilter: 'bug_%' });
+
+		expect(digest).toMatch(/partial list/);
+		expect(digest).toContain('only tables matching "bug_%" are listed');
+		expect(digest).toContain('INFORMATION_SCHEMA.TABLES');
+	});
+
+	it('names both causes when a filter and the budget both cut the list', () => {
+		const many = Array.from({ length: 200 }, (_unused, index) => ({
+			TABLE_SCHEMA: 'dbo',
+			TABLE_NAME: `bug_table_${index}`,
+			COLUMN_NAME: 'a_long_column_name_here',
+			DATA_TYPE: 'varchar',
+		}));
+
+		const digest = formatSchemaDigest(many, { maxChars: 300, tableFilter: 'bug_%' });
+
+		expect(digest).toContain('only tables matching "bug_%" are listed');
+		expect(digest).toMatch(/and \d+ more tables? did not fit/);
 	});
 
 	it('keeps at least one table even with a tiny budget', () => {
