@@ -6,7 +6,12 @@ import {
 	supplyFabricSqlTool,
 	toToolName,
 } from '../../nodes/FabricSqlTool/FabricSqlTool.node';
-import { FABRIC_SQL_TOOL_SCHEMA, buildFabricSqlTool } from '../../nodes/FabricSqlTool/tool';
+import {
+	FABRIC_SQL_TOOL_SCHEMA,
+	QUERY_CACHE_LIMIT,
+	buildFabricSqlTool,
+} from '../../nodes/FabricSqlTool/tool';
+import { QUERY_COST_GUIDANCE } from '../../nodes/FabricSql/core/toolOutput';
 import type { ToolRunLog } from '../../nodes/FabricSqlTool/toolRunLog';
 import type { FabricSqlCredentials, PoolLike } from '../../nodes/FabricSql/types';
 import { recordingPool, rowsResult, testCredentials, testNode } from '../helpers/context';
@@ -22,15 +27,26 @@ const schemaRows = rowsResult(
 	],
 );
 
-/** A withPool stand-in that hands the callback a recording pool instead of a connection. */
-function fakeWithPool(...results: Parameters<typeof recordingPool>) {
-	const { pool, calls } = recordingPool(...results);
-	const spy = vi.fn(
-		async (_credentials: FabricSqlCredentials, fn: (p: PoolLike) => Promise<unknown>) =>
-			await fn(pool),
-	);
+/** A pool that opens fine but whose every query throws. */
+function failingPool(onQuery: () => Promise<never>): PoolLike {
+	return {
+		request: () => ({
+			arrayRowMode: undefined,
+			input() {
+				return this;
+			},
+			query: onQuery,
+		}),
+		close: vi.fn(async () => undefined),
+	};
+}
 
-	return { withPool: spy as unknown as never, calls, spy };
+/** A shared, already-open pool, plus an openPool spy so reuse can be counted. */
+function fakePool(...results: Parameters<typeof recordingPool>) {
+	const { pool, calls } = recordingPool(...results);
+	const openPool = vi.fn(async () => pool);
+
+	return { pool, calls, openPool };
 }
 
 function supplyContext(parameters: Record<string, unknown> = {}, name = 'Fabric SQL Tool') {
@@ -86,7 +102,7 @@ describe('the main node no longer doubles as a tool', () => {
 
 describe('buildFabricSqlTool — querying', () => {
 	function tool(overrides: Partial<Parameters<typeof buildFabricSqlTool>[0]> = {}) {
-		const { withPool, calls } = fakeWithPool(rowsResult(['id'], [[1], [2]]));
+		const { pool, calls } = fakePool(rowsResult(['id'], [[1], [2]]));
 
 		return {
 			calls,
@@ -95,7 +111,7 @@ describe('buildFabricSqlTool — querying', () => {
 				description: 'd',
 				credentials: testCredentials,
 				options: { maxRows: 100, maxChars: 8000 },
-				withPool,
+				pool,
 				...overrides,
 			}),
 		};
@@ -132,13 +148,13 @@ describe('buildFabricSqlTool — querying', () => {
 	});
 
 	it('reports an empty argument without opening a connection', async () => {
-		const { withPool, calls } = fakeWithPool();
+		const { pool, calls } = fakePool();
 		const built = buildFabricSqlTool({
 			name: 'fabric',
 			description: 'd',
 			credentials: testCredentials,
 			options: { maxRows: 100, maxChars: 8000 },
-			withPool,
+			pool,
 		});
 
 		expect(await callTool(built, '   ')).toMatch(/No SQL was provided/);
@@ -148,7 +164,7 @@ describe('buildFabricSqlTool — querying', () => {
 
 describe('buildFabricSqlTool — read-only is unconditional', () => {
 	function tool(credentials: FabricSqlCredentials) {
-		const { withPool, calls } = fakeWithPool();
+		const { pool, calls } = fakePool();
 
 		return {
 			calls,
@@ -157,7 +173,7 @@ describe('buildFabricSqlTool — read-only is unconditional', () => {
 				description: 'd',
 				credentials,
 				options: { maxRows: 100, maxChars: 8000 },
-				withPool,
+				pool,
 			}),
 		};
 	}
@@ -196,7 +212,7 @@ describe('buildFabricSqlTool — failures come back as text', () => {
 			description: 'd',
 			credentials: testCredentials,
 			options: { maxRows: 100, maxChars: 8000 },
-			withPool: failing as unknown as never,
+			pool: failingPool(failing),
 		});
 
 		const answer = await callTool(built, 'SELECT * FROM dbo.nope');
@@ -214,7 +230,7 @@ describe('buildFabricSqlTool — failures come back as text', () => {
 			description: 'd',
 			credentials: testCredentials,
 			options: { maxRows: 100, maxChars: 8000 },
-			withPool: failing as unknown as never,
+			pool: failingPool(failing),
 		});
 
 		const answer = await callTool(built, 'SELECT 1');
@@ -226,10 +242,10 @@ describe('buildFabricSqlTool — failures come back as text', () => {
 
 describe('supplyFabricSqlTool', () => {
 	it('appends the schema digest to the tool description', async () => {
-		const { withPool } = fakeWithPool(schemaRows);
+		const { openPool } = fakePool(schemaRows);
 		const { ctx } = supplyContext({ toolDescription: 'Bug data.', includeSchema: true });
 
-		const supplied = await supplyFabricSqlTool(ctx, { withPool }, 0);
+		const supplied = await supplyFabricSqlTool(ctx, { openPool }, 0);
 		const tool = supplied.response as { description: string };
 
 		expect(tool.description).toContain('Bug data.');
@@ -238,14 +254,14 @@ describe('supplyFabricSqlTool', () => {
 	});
 
 	it('filters the schema by the LIKE pattern, bound as a parameter', async () => {
-		const { withPool, calls } = fakeWithPool(schemaRows);
+		const { openPool, calls } = fakePool(schemaRows);
 		const { ctx } = supplyContext({
 			toolDescription: 'd',
 			includeSchema: true,
 			tableFilter: 'bug_%',
 		});
 
-		await supplyFabricSqlTool(ctx, { withPool }, 0);
+		await supplyFabricSqlTool(ctx, { openPool }, 0);
 
 		expect(calls[0].sql).toContain('AND TABLE_NAME LIKE @pattern');
 		expect(calls[0].parameters).toEqual({ pattern: 'bug_%' });
@@ -254,14 +270,14 @@ describe('supplyFabricSqlTool', () => {
 	it('tells the model the list is partial when a filter is set', async () => {
 		// The filter is applied when the description is built, before any model turn, so the
 		// model cannot ask about it — it has to be told, or it treats the subset as everything.
-		const { withPool } = fakeWithPool(schemaRows);
+		const { openPool } = fakePool(schemaRows);
 		const { ctx } = supplyContext({
 			toolDescription: 'Bug data.',
 			includeSchema: true,
 			tableFilter: 'bug_%',
 		});
 
-		const supplied = await supplyFabricSqlTool(ctx, { withPool }, 0);
+		const supplied = await supplyFabricSqlTool(ctx, { openPool }, 0);
 		const description = (supplied.response as { description: string }).description;
 
 		expect(description).toContain('only tables matching "bug_%" are listed');
@@ -269,31 +285,34 @@ describe('supplyFabricSqlTool', () => {
 	});
 
 	it('claims no partiality when no filter is set', async () => {
-		const { withPool } = fakeWithPool(schemaRows);
+		const { openPool } = fakePool(schemaRows);
 		const { ctx } = supplyContext({ toolDescription: 'Bug data.', includeSchema: true });
 
-		const supplied = await supplyFabricSqlTool(ctx, { withPool }, 0);
+		const supplied = await supplyFabricSqlTool(ctx, { openPool }, 0);
 
 		expect((supplied.response as { description: string }).description).not.toMatch(/partial list/);
 	});
 
 	it('excludes system schemas', async () => {
-		const { withPool, calls } = fakeWithPool(schemaRows);
+		const { openPool, calls } = fakePool(schemaRows);
 		const { ctx } = supplyContext({ toolDescription: 'd', includeSchema: true });
 
-		await supplyFabricSqlTool(ctx, { withPool }, 0);
+		await supplyFabricSqlTool(ctx, { openPool }, 0);
 
 		expect(calls[0].sql).toContain("TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCHEMA')");
 	});
 
 	it('reads no schema when the option is off', async () => {
-		const { withPool, calls } = fakeWithPool(schemaRows);
+		const { openPool, calls } = fakePool(schemaRows);
 		const { ctx } = supplyContext({ toolDescription: 'Just this.', includeSchema: false });
 
-		const supplied = await supplyFabricSqlTool(ctx, { withPool }, 0);
+		const supplied = await supplyFabricSqlTool(ctx, { openPool }, 0);
 
 		expect(calls).toHaveLength(0);
-		expect((supplied.response as { description: string }).description).toBe('Just this.');
+		const description = (supplied.response as { description: string }).description;
+
+		expect(description).toContain('Just this.');
+		expect(description).not.toContain('Available tables');
 	});
 
 	it('still supplies a working tool when the schema read fails', async () => {
@@ -302,33 +321,36 @@ describe('supplyFabricSqlTool', () => {
 		});
 		const { ctx, warn } = supplyContext({ toolDescription: 'Bug data.', includeSchema: true });
 
-		const supplied = await supplyFabricSqlTool(ctx, { withPool: failing as unknown as never }, 0);
+		const supplied = await supplyFabricSqlTool(ctx, { openPool: async () => failingPool(failing) }, 0);
 
-		expect((supplied.response as { description: string }).description).toBe('Bug data.');
+		const description = (supplied.response as { description: string }).description;
+
+		expect(description).toContain('Bug data.');
+		expect(description).not.toContain('Available tables');
 		expect(warn).toHaveBeenCalledOnce();
 	});
 
 	it('names the tool after the node, so a renamed node stays callable', async () => {
-		const { withPool } = fakeWithPool(schemaRows);
+		const { openPool } = fakePool(schemaRows);
 		const { ctx } = supplyContext(
 			{ toolDescription: 'd', includeSchema: false },
 			'Fabric SQL Tool (bugs)',
 		);
 
-		const supplied = await supplyFabricSqlTool(ctx, { withPool }, 0);
+		const supplied = await supplyFabricSqlTool(ctx, { openPool }, 0);
 
 		expect((supplied.response as { name: string }).name).toBe('fabric_sql_tool_bugs');
 	});
 
 	it('applies the configured caps', async () => {
-		const { withPool, calls } = fakeWithPool(schemaRows, rowsResult(['id'], [[1], [2], [3]]));
+		const { openPool, calls } = fakePool(schemaRows, rowsResult(['id'], [[1], [2], [3]]));
 		const { ctx } = supplyContext({
 			toolDescription: 'd',
 			includeSchema: false,
 			options: { maxRows: 2, maxChars: 900 },
 		});
 
-		const supplied = await supplyFabricSqlTool(ctx, { withPool }, 0);
+		const supplied = await supplyFabricSqlTool(ctx, { openPool }, 0);
 		const answer = await callTool(
 			supplied.response as { invoke: (input: unknown) => Promise<unknown> },
 			'SELECT id FROM t',
@@ -354,38 +376,38 @@ describe('toToolName', () => {
 	});
 });
 
+function fakeLog() {
+	const started: Array<Record<string, unknown>> = [];
+	const ended: Array<Record<string, unknown>> = [];
+	const errored: unknown[] = [];
+	const log: ToolRunLog = {
+		start: (payload) => {
+			started.push(payload);
+			return started.length - 1;
+		},
+		end: (_index, payload) => {
+			ended.push(payload);
+		},
+		error: (_index, error) => {
+			errored.push(error);
+		},
+	};
+
+	return { log, started, ended, errored };
+}
+
 describe('canvas visibility', () => {
-	function fakeLog() {
-		const started: Array<Record<string, unknown>> = [];
-		const ended: Array<Record<string, unknown>> = [];
-		const errored: unknown[] = [];
-		const log: ToolRunLog = {
-			start: (payload) => {
-				started.push(payload);
-				return started.length - 1;
-			},
-			end: (_index, payload) => {
-				ended.push(payload);
-			},
-			error: (_index, error) => {
-				errored.push(error);
-			},
-		};
-
-		return { log, started, ended, errored };
-	}
-
 	it('registers the call and the result, so the node does not look untouched', async () => {
 		// Without this the tool answers the agent correctly and leaves no trace in the
 		// execution — which is most of what you need when an agent reaches a wrong conclusion.
-		const { withPool } = fakeWithPool(rowsResult(['id'], [[1]]));
+		const { pool } = fakePool(rowsResult(['id'], [[1]]));
 		const { log, started, ended } = fakeLog();
 		const built = buildFabricSqlTool({
 			name: 'fabric',
 			description: 'd',
 			credentials: testCredentials,
 			options: { maxRows: 10, maxChars: 8000 },
-			withPool,
+			pool,
 			log,
 		});
 
@@ -397,14 +419,14 @@ describe('canvas visibility', () => {
 	});
 
 	it('logs the SQL actually executed, not the SQL asked for', async () => {
-		const { withPool } = fakeWithPool(rowsResult(['id'], [[1]]));
+		const { pool } = fakePool(rowsResult(['id'], [[1]]));
 		const { log, ended } = fakeLog();
 		const built = buildFabricSqlTool({
 			name: 'fabric',
 			description: 'd',
 			credentials: testCredentials,
 			options: { maxRows: 10, maxChars: 8000 },
-			withPool,
+			pool,
 			log,
 		});
 
@@ -423,7 +445,7 @@ describe('canvas visibility', () => {
 			description: 'd',
 			credentials: testCredentials,
 			options: { maxRows: 10, maxChars: 8000 },
-			withPool: failing as unknown as never,
+			pool: failingPool(failing),
 			log,
 		});
 
@@ -436,14 +458,14 @@ describe('canvas visibility', () => {
 	});
 
 	it('still registers a call the guard rejects', async () => {
-		const { withPool } = fakeWithPool();
+		const { pool } = fakePool();
 		const { log, started, ended } = fakeLog();
 		const built = buildFabricSqlTool({
 			name: 'fabric',
 			description: 'd',
 			credentials: testCredentials,
 			options: { maxRows: 10, maxChars: 8000 },
-			withPool,
+			pool,
 			log,
 		});
 
@@ -454,15 +476,181 @@ describe('canvas visibility', () => {
 	});
 
 	it('works with no logger at all', async () => {
-		const { withPool } = fakeWithPool(rowsResult(['id'], [[1]]));
+		const { pool } = fakePool(rowsResult(['id'], [[1]]));
 		const built = buildFabricSqlTool({
 			name: 'fabric',
 			description: 'd',
 			credentials: testCredentials,
 			options: { maxRows: 10, maxChars: 8000 },
-			withPool,
+			pool,
 		});
 
 		expect(JSON.parse(await callTool(built, 'SELECT id FROM t')).rowCount).toBe(1);
+	});
+});
+
+describe('one connection per execution', () => {
+	it('opens the pool once and reuses it for the schema read and every call', async () => {
+		// The whole point: a per-call pool made every question the model asked pay a TCP
+		// connect, a TLS handshake and an Entra ID token exchange.
+		const { openPool, calls } = fakePool(schemaRows, rowsResult(['id'], [[1]]));
+		const { ctx } = supplyContext({ toolDescription: 'd', includeSchema: true });
+
+		const supplied = await supplyFabricSqlTool(ctx, { openPool }, 0);
+		const tool = supplied.response as { invoke: (input: unknown) => Promise<unknown> };
+
+		await callTool(tool, 'SELECT id FROM a');
+		await callTool(tool, 'SELECT id FROM b');
+		await callTool(tool, 'SELECT id FROM c');
+
+		expect(openPool).toHaveBeenCalledOnce();
+		// One schema read plus three distinct queries, all on the same pool.
+		expect(calls).toHaveLength(4);
+	});
+
+	it('closes the pool when the execution ends', async () => {
+		const { openPool, pool } = fakePool(schemaRows);
+		const { ctx } = supplyContext({ toolDescription: 'd', includeSchema: false });
+
+		const supplied = await supplyFabricSqlTool(ctx, { openPool }, 0);
+
+		expect(pool.close).not.toHaveBeenCalled();
+		await supplied.closeFunction?.();
+		expect(pool.close).toHaveBeenCalledOnce();
+	});
+
+	it('fails loudly when the pool cannot be opened at all', async () => {
+		// Unlike a failed schema read, this is fatal: a tool that cannot connect has nothing to
+		// offer, and saying so now beats failing on the agent's first question.
+		const { ctx } = supplyContext({ toolDescription: 'd', includeSchema: true });
+		const openPool = async () => {
+			throw Object.assign(new Error('nope'), { code: 'ENOTFOUND' });
+		};
+
+		await expect(supplyFabricSqlTool(ctx, { openPool }, 0)).rejects.toThrow(/Could not reach/);
+	});
+});
+
+describe('repeated questions', () => {
+	async function toolWith(...results: Parameters<typeof recordingPool>) {
+		const { openPool, calls } = fakePool(...results);
+		const { ctx } = supplyContext({ toolDescription: 'd', includeSchema: false });
+		const supplied = await supplyFabricSqlTool(ctx, { openPool }, 0);
+
+		return {
+			calls,
+			tool: supplied.response as { invoke: (input: unknown) => Promise<unknown> },
+		};
+	}
+
+	it('answers an identical query from memory instead of asking again', async () => {
+		const { tool, calls } = await toolWith(rowsResult(['id'], [[1]]));
+
+		const first = await callTool(tool, 'SELECT id FROM t');
+		const second = await callTool(tool, 'SELECT id FROM t');
+
+		expect(second).toBe(first);
+		expect(calls).toHaveLength(1);
+	});
+
+	it('treats a differently written query as a different question', async () => {
+		const { tool, calls } = await toolWith(rowsResult(['id'], [[1]]));
+
+		await callTool(tool, 'SELECT id FROM t');
+		await callTool(tool, 'SELECT id FROM u');
+
+		expect(calls).toHaveLength(2);
+	});
+
+	it('caches on the executed SQL, so two spellings of one query share an answer', async () => {
+		const { tool, calls } = await toolWith(rowsResult(['id'], [[1]]));
+
+		// Both become `SELECT TOP (100) id FROM t` once the row cap is applied.
+		await callTool(tool, 'SELECT id FROM t');
+		await callTool(tool, '  SELECT id FROM t  ');
+
+		expect(calls).toHaveLength(1);
+	});
+
+	it('still registers a cached call, so the canvas matches the transcript', async () => {
+		const { pool } = fakePool(rowsResult(['id'], [[1]]));
+		const { log, started, ended } = fakeLog();
+		const built = buildFabricSqlTool({
+			name: 'fabric',
+			description: 'd',
+			credentials: testCredentials,
+			options: { maxRows: 100, maxChars: 8000 },
+			pool,
+			log,
+		});
+
+		await callTool(built, 'SELECT id FROM t');
+		await callTool(built, 'SELECT id FROM t');
+
+		expect(started).toHaveLength(2);
+		expect(ended).toHaveLength(2);
+		expect(ended[0].cached).toBe(false);
+		expect(ended[1].cached).toBe(true);
+	});
+
+	it('does not cache a failure, which is transient', async () => {
+		let attempts = 0;
+		const pool = failingPool(async () => {
+			attempts += 1;
+			throw Object.assign(new Error('timed out'), { code: 'ETIMEOUT' });
+		});
+		const built = buildFabricSqlTool({
+			name: 'fabric',
+			description: 'd',
+			credentials: testCredentials,
+			options: { maxRows: 100, maxChars: 8000 },
+			pool,
+		});
+
+		await callTool(built, 'SELECT 1');
+		await callTool(built, 'SELECT 1');
+
+		expect(attempts).toBe(2);
+	});
+
+	it('evicts the oldest answer once the cache is full', async () => {
+		const { pool, calls } = fakePool(rowsResult(['id'], [[1]]));
+		const built = buildFabricSqlTool({
+			name: 'fabric',
+			description: 'd',
+			credentials: testCredentials,
+			options: { maxRows: 100, maxChars: 8000 },
+			pool,
+		});
+
+		for (let i = 0; i < QUERY_CACHE_LIMIT + 1; i += 1) {
+			await callTool(built, `SELECT ${i} AS n`);
+		}
+		const before = calls.length;
+		// The very first query has been evicted, so it costs a round trip again.
+		await callTool(built, 'SELECT 0 AS n');
+
+		expect(calls.length).toBe(before + 1);
+	});
+});
+
+describe('query cost guidance', () => {
+	it('is always part of what the model reads', async () => {
+		const { openPool } = fakePool(schemaRows);
+		const { ctx } = supplyContext({ toolDescription: 'd', includeSchema: false });
+
+		const supplied = await supplyFabricSqlTool(ctx, { openPool }, 0);
+		const description = (supplied.response as { description: string }).description;
+
+		expect(description).toContain(QUERY_COST_GUIDANCE);
+	});
+
+	it('tells the model not to use SELECT *, which the row cap cannot limit', () => {
+		expect(QUERY_COST_GUIDANCE).toContain('SELECT *');
+		expect(QUERY_COST_GUIDANCE).toContain('no indexes');
+	});
+
+	it('says the same in the sql argument description, where the model reads it again', () => {
+		expect(FABRIC_SQL_TOOL_SCHEMA.properties.sql.description).toContain('Name the columns');
 	});
 });

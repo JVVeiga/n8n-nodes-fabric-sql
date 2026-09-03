@@ -8,10 +8,17 @@ import type {
 import { NodeConnectionTypes } from 'n8n-workflow';
 
 import { fabricSqlConnectionTest } from '../FabricSql/methods/credentialTest';
-import { formatSchemaDigest } from '../FabricSql/core/toolOutput';
+import { QUERY_COST_GUIDANCE, formatSchemaDigest } from '../FabricSql/core/toolOutput';
 import { toObjects } from '../FabricSql/core/resultMapper';
-import { runQuery, withPool } from '../FabricSql/transport/connection';
+import {
+	AGENT_POOL_IDLE_MS,
+	asPool,
+	closeQuietly,
+	createPool,
+	runQuery,
+} from '../FabricSql/transport/connection';
 import { loadFabricSqlCredentials } from '../FabricSql/transport/credentials';
+import { toNodeError } from '../FabricSql/transport/errors';
 import type { FabricSqlCredentials, PoolLike } from '../FabricSql/types';
 import { fabricSqlToolProperties } from './properties';
 import { toolRunLog } from './toolRunLog';
@@ -25,16 +32,18 @@ type ToolNodeOptions = {
 
 export type SupplyFabricSqlToolDeps = {
 	/** Injected so a test never opens a connection. Absent means the real pool. */
-	withPool?: typeof withPool;
+	openPool?: (credentials: FabricSqlCredentials) => Promise<PoolLike>;
 };
 
 /**
  * The lakehouse as a purpose-built `ai_tool` sub-node.
  *
- * Separate from `FabricSql` rather than relying on `usableAsTool`, for one reason that only
- * this shape allows: `supplyData` is async and holds the credential, so the schema can be read
- * *before* the agent starts and written into the tool description. A model that already knows
- * the table names stops inventing them, which is most of what makes a SQL tool unreliable.
+ * Separate from `FabricSql` rather than relying on `usableAsTool`, for two things only this
+ * shape allows. `supplyData` is async and holds the credential, so the schema can be read
+ * *before* the agent starts and written into the tool description — a model that already knows
+ * the table names stops inventing them. And it can hold one connection for the whole
+ * conversation, instead of paying a TCP connect, a TLS handshake and an Entra ID token
+ * exchange for every question the model asks.
  *
  * `usableAsTool` was removed from `FabricSql` when this landed — n8n synthesized a
  * `fabricSqlTool` type from that flag, which is the name this node needs.
@@ -84,23 +93,43 @@ export async function supplyFabricSqlTool(
 	const includeSchema = ctx.getNodeParameter('includeSchema', itemIndex, true) === true;
 	const tableFilter = String(ctx.getNodeParameter('tableFilter', itemIndex, '')).trim();
 
+	const open =
+		deps.openPool ??
+		(async (creds: FabricSqlCredentials) =>
+			asPool(await createPool(creds, { idleTimeoutMillis: AGENT_POOL_IDLE_MS })));
+
+	// One pool for the schema read AND every call the agent makes. Failing to open it IS fatal
+	// here, unlike a failed schema read: a tool that cannot connect has nothing to offer, and
+	// saying so now beats handing the agent a tool that fails on its first use.
+	let pool: PoolLike;
+
+	try {
+		pool = await open(credentials);
+	} catch (error) {
+		throw toNodeError(ctx.getNode(), error, credentials, itemIndex);
+	}
+
 	const digest = includeSchema
-		? await readSchemaDigest(ctx, deps, credentials, tableFilter, options.maxSchemaChars ?? 4000)
+		? await readSchemaDigest(ctx, pool, tableFilter, options.maxSchemaChars ?? 2000)
 		: '';
 
 	const tool = buildFabricSqlTool({
 		name: toToolName(ctx.getNode().name),
-		description: digest === '' ? toolDescription : `${toolDescription}\n\n${digest}`,
+		description: [toolDescription, digest, QUERY_COST_GUIDANCE]
+			.filter((part) => part !== '')
+			.join('\n\n'),
 		credentials,
+		pool,
+		log: toolRunLog(ctx),
 		options: {
 			maxRows: Math.max(1, options.maxRows ?? 100),
 			maxChars: Math.max(500, options.maxChars ?? 8000),
 		},
-		log: toolRunLog(ctx),
-		...(deps.withPool ? { withPool: deps.withPool } : {}),
 	});
 
-	return { response: tool };
+	// n8n calls this when the execution ends. Without it the pool would outlive the run and
+	// hold a socket open against a credential that may since have been rotated.
+	return { response: tool, closeFunction: async () => await closeQuietly(pool) };
 }
 
 /**
@@ -113,13 +142,10 @@ export async function supplyFabricSqlTool(
  */
 async function readSchemaDigest(
 	ctx: ISupplyDataFunctions,
-	deps: SupplyFabricSqlToolDeps,
-	credentials: FabricSqlCredentials,
+	pool: PoolLike,
 	tableFilter: string,
 	maxChars: number,
 ): Promise<string> {
-	const open = deps.withPool ?? withPool;
-
 	const parameters: Record<string, unknown> = {};
 	let filter = "WHERE TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCHEMA')";
 
@@ -129,17 +155,15 @@ async function readSchemaDigest(
 	}
 
 	try {
-		const result = await open(credentials, async (pool: PoolLike) =>
-			runQuery(pool, {
-				sql:
-					'SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE ' +
-					`FROM INFORMATION_SCHEMA.COLUMNS ${filter} ` +
-					'ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION',
-				parameters,
-			}),
-		);
+		const result = await runQuery(pool, {
+			sql:
+				'SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE ' +
+				`FROM INFORMATION_SCHEMA.COLUMNS ${filter} ` +
+				'ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION',
+			parameters,
+		});
 
-		return formatSchemaDigest(toObjects(result) as Array<Record<string, unknown>>, {
+		return formatSchemaDigest(toObjects(result), {
 			maxChars,
 			...(tableFilter === '' ? {} : { tableFilter }),
 		});

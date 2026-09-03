@@ -21,6 +21,25 @@ export interface CompactResult {
 }
 
 /**
+ * Cost guidance appended to the tool description.
+ *
+ * Fabric has no indexes to create — every table is clustered columnstore, and the Parquet
+ * files carry the data, the statistics and the "index" together. That changes which SQL is
+ * cheap in a way a model will not assume: naming three columns instead of `SELECT *` reads a
+ * fraction of the data, where on a row store it would barely matter. The row cap caps rows,
+ * never columns, so this is the only thing standing between an agent and a full-width scan.
+ *
+ * Short on purpose: this text is part of the tool description, which is re-sent to the model
+ * on every single turn.
+ */
+export const QUERY_COST_GUIDANCE = [
+	'Query cost notes for this store:',
+	'- Storage is columnar. Name the columns you need instead of SELECT * — reading 3 of 40 columns costs a fraction as much.',
+	'- There are no indexes. A filter on a date or partition column is what lets the engine skip files; other filters scan.',
+	'- Prefer an aggregate (COUNT, SUM, GROUP BY) over pulling rows when you only need the number.',
+].join('\n');
+
+/**
  * Add `TOP (n)` when it is unambiguously safe to do so.
  *
  * The point is to stop the *server* from materializing a million rows, not just to stop us

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { InvalidServerError } from '../../nodes/FabricSql/core/errors';
 import {
+	AGENT_POOL_IDLE_MS,
 	FABRIC_SQL_PORT,
 	buildConnectionConfig,
 	closeQuietly,
@@ -173,6 +174,23 @@ describe('buildConnectionConfig', () => {
 
 	it('enables arrayRowMode so duplicate column names survive', () => {
 		expect(buildConnectionConfig(credentials).arrayRowMode).toBe(true);
+	});
+
+	it('drops an idle connection after 30s in a workflow', () => {
+		expect(buildConnectionConfig(credentials).pool).toMatchObject({
+			idleTimeoutMillis: 30_000,
+		});
+	});
+
+	it('holds an idle connection far longer when told to, for an agent conversation', () => {
+		// The gaps between an agent's questions are however long the model takes to think, and
+		// at the workflow default the socket would be dropped mid-turn.
+		const config = buildConnectionConfig(credentials, {
+			idleTimeoutMillis: AGENT_POOL_IDLE_MS,
+		});
+
+		expect(config.pool).toMatchObject({ idleTimeoutMillis: AGENT_POOL_IDLE_MS });
+		expect(AGENT_POOL_IDLE_MS).toBeGreaterThan(30_000);
 	});
 });
 

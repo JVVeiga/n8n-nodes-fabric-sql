@@ -14,6 +14,23 @@ export const FABRIC_SQL_PORT = 1433;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** How long an unused connection is kept in a workflow execution. */
+const DEFAULT_POOL_IDLE_MS = 30_000;
+
+/**
+ * The same, for a pool held across an agent conversation.
+ *
+ * A tool's pool lives for the whole execution, and the gaps between calls are however long the
+ * model takes to think. At the workflow default the socket would be dropped during a 40-second
+ * turn and the next call would pay the TCP, TLS and token exchange again — which is the cost
+ * holding the pool exists to avoid.
+ */
+export const AGENT_POOL_IDLE_MS = 300_000;
+
+export interface PoolOverrides {
+	idleTimeoutMillis?: number;
+}
+
 /**
  * Reduce whatever the user pasted into the bare hostname the driver needs.
  *
@@ -58,7 +75,10 @@ export function normalizeServer(raw: string): string {
  * man-in-the-middle. `arrayRowMode` is on so duplicate column names survive (see
  * `core/resultMapper`).
  */
-export function buildConnectionConfig(credentials: FabricSqlCredentials): mssql.config {
+export function buildConnectionConfig(
+	credentials: FabricSqlCredentials,
+	overrides: PoolOverrides = {},
+): mssql.config {
 	return {
 		server: normalizeServer(credentials.server),
 		database: credentials.database.trim(),
@@ -78,7 +98,7 @@ export function buildConnectionConfig(credentials: FabricSqlCredentials): mssql.
 		pool: {
 			max: 1,
 			min: 0,
-			idleTimeoutMillis: 30_000,
+			idleTimeoutMillis: overrides.idleTimeoutMillis ?? DEFAULT_POOL_IDLE_MS,
 		},
 		connectionTimeout: credentials.connectTimeout || DEFAULT_TIMEOUT_MS,
 		requestTimeout: credentials.requestTimeout || DEFAULT_TIMEOUT_MS,
@@ -86,8 +106,11 @@ export function buildConnectionConfig(credentials: FabricSqlCredentials): mssql.
 	};
 }
 
-export async function createPool(credentials: FabricSqlCredentials): Promise<mssql.ConnectionPool> {
-	const pool = new mssql.ConnectionPool(buildConnectionConfig(credentials));
+export async function createPool(
+	credentials: FabricSqlCredentials,
+	overrides: PoolOverrides = {},
+): Promise<mssql.ConnectionPool> {
+	const pool = new mssql.ConnectionPool(buildConnectionConfig(credentials, overrides));
 
 	await pool.connect();
 
