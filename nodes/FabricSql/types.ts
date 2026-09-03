@@ -23,15 +23,25 @@ export interface BuiltQuery {
 	parameters: Record<string, unknown>;
 }
 
+export interface ColumnMetadataLike {
+	index: number;
+	name: string;
+}
+
 /**
  * Structural subset of `mssql.IResult` that `core/` depends on.
  *
  * Declared here so the pure modules never import `mssql`, which keeps them testable
  * without a driver and without a database.
+ *
+ * Rows are arrays, not keyed objects: queries run with the driver's `arrayRowMode`, because
+ * a keyed row drops columns whose names collide — `SELECT a.id, b.id` would silently lose one
+ * of them. The parallel `columns` metadata carries the real names, in order.
  */
 export interface QueryResultLike {
-	recordsets: Array<Array<Record<string, unknown>>>;
+	recordsets: Array<Array<unknown[]>>;
 	rowsAffected: number[];
+	columns: ColumnMetadataLike[][];
 }
 
 export type WhereOperator =
@@ -60,6 +70,7 @@ export interface SelectOptions {
 
 /** Minimal request surface used by `runQuery`, so tests can pass a stub instead of a driver. */
 export interface RequestLike {
+	arrayRowMode?: boolean | null;
 	input(name: string, value: unknown): unknown;
 	query(sql: string): Promise<QueryResultLike>;
 }
