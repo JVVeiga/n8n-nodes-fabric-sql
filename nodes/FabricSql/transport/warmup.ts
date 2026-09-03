@@ -55,9 +55,7 @@ export async function warmUpFabricToken(
 	return { ok: true };
 }
 
-export async function acquireFabricApiToken(
-	credentials: FabricSqlCredentials,
-): Promise<string> {
+export async function acquireFabricApiToken(credentials: FabricSqlCredentials): Promise<string> {
 	const credential = new ClientSecretCredential(
 		credentials.tenantId.trim(),
 		credentials.clientId.trim(),

@@ -21,9 +21,7 @@ describe('buildSelect', () => {
 	});
 
 	it('quotes each named column', () => {
-		expect(buildSelect({ table: 't', columns: ['a', 'b'] }).sql).toBe(
-			'SELECT [a], [b] FROM [t]',
-		);
+		expect(buildSelect({ table: 't', columns: ['a', 'b'] }).sql).toBe('SELECT [a], [b] FROM [t]');
 	});
 
 	it('binds the limit rather than inlining it', () => {
@@ -68,9 +66,9 @@ describe('buildSelect', () => {
 	});
 
 	it('binds nothing for IS NOT NULL', () => {
-		expect(
-			buildSelect({ table: 't', where: [{ column: 'a', operator: 'isNotNull' }] }).sql,
-		).toBe('SELECT * FROM [t] WHERE [a] IS NOT NULL');
+		expect(buildSelect({ table: 't', where: [{ column: 'a', operator: 'isNotNull' }] }).sql).toBe(
+			'SELECT * FROM [t] WHERE [a] IS NOT NULL',
+		);
 	});
 
 	it.each([
@@ -122,10 +120,14 @@ describe('buildSelect', () => {
 
 describe('buildInsert', () => {
 	it('builds a single multi-row statement with every value bound', () => {
-		const built = buildInsert('dbo.t', ['a', 'b'], [
-			{ a: 1, b: 'x' },
-			{ a: 2, b: 'y' },
-		]);
+		const built = buildInsert(
+			'dbo.t',
+			['a', 'b'],
+			[
+				{ a: 1, b: 'x' },
+				{ a: 2, b: 'y' },
+			],
+		);
 
 		expect(built).toHaveLength(1);
 		expect(built[0].sql).toBe(
@@ -154,9 +156,7 @@ describe('buildInsert', () => {
 
 		expect(built).toHaveLength(2);
 		for (const statement of built) {
-			expect(Object.keys(statement.parameters).length).toBeLessThanOrEqual(
-				MSSQL_PARAMETER_LIMIT,
-			);
+			expect(Object.keys(statement.parameters).length).toBeLessThanOrEqual(MSSQL_PARAMETER_LIMIT);
 		}
 		expect(
 			built.reduce((sum, statement) => sum + Object.keys(statement.parameters).length, 0),
@@ -201,7 +201,11 @@ describe('buildDelete', () => {
 	});
 
 	it('chunks a long IN list', () => {
-		const built = buildDelete('t', 'id', Array.from({ length: 2101 }, (_, i) => i));
+		const built = buildDelete(
+			't',
+			'id',
+			Array.from({ length: 2101 }, (_, i) => i),
+		);
 
 		expect(built).toHaveLength(2);
 		expect(Object.keys(built[0].parameters)).toHaveLength(MSSQL_PARAMETER_LIMIT);

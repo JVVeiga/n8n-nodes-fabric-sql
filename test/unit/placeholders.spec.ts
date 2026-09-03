@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { PlaceholderCountError } from '../../nodes/FabricSql/core/errors';
-import {
-	bindPlaceholders,
-	countPlaceholders,
-} from '../../nodes/FabricSql/core/placeholders';
+import { bindPlaceholders, countPlaceholders } from '../../nodes/FabricSql/core/placeholders';
 import { codeOnly } from '../../nodes/FabricSql/core/scanner';
 
 describe('countPlaceholders', () => {

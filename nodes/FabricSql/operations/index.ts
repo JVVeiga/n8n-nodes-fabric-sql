@@ -1,5 +1,7 @@
 import type { OperationHandler } from '../types';
+import { describeTable } from './describeTable';
 import { executeQuery } from './executeQuery';
+import { listTables } from './listTables';
 import { selectRows } from './selectRows';
 
 /**
@@ -11,6 +13,8 @@ import { selectRows } from './selectRows';
 export const operations: Record<string, OperationHandler> = {
 	'query:executeQuery': executeQuery,
 	'row:select': selectRows,
+	'schema:listTables': listTables,
+	'schema:describeTable': describeTable,
 };
 
 export function resolveOperation(

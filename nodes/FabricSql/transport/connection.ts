@@ -86,9 +86,7 @@ export function buildConnectionConfig(credentials: FabricSqlCredentials): mssql.
 	};
 }
 
-export async function createPool(
-	credentials: FabricSqlCredentials,
-): Promise<mssql.ConnectionPool> {
+export async function createPool(credentials: FabricSqlCredentials): Promise<mssql.ConnectionPool> {
 	const pool = new mssql.ConnectionPool(buildConnectionConfig(credentials));
 
 	await pool.connect();
@@ -131,10 +129,7 @@ export async function withPool<T>(
 /**
  * The lifecycle half of `withPool`, separated so it can be exercised with a stub pool.
  */
-export async function usePool<T>(
-	pool: PoolLike,
-	fn: (pool: PoolLike) => Promise<T>,
-): Promise<T> {
+export async function usePool<T>(pool: PoolLike, fn: (pool: PoolLike) => Promise<T>): Promise<T> {
 	try {
 		return await fn(pool);
 	} finally {

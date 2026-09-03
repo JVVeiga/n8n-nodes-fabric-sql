@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-	FABRIC_WORKSPACES_URL,
-	warmUpFabricToken,
-} from '../../nodes/FabricSql/transport/warmup';
+import { FABRIC_WORKSPACES_URL, warmUpFabricToken } from '../../nodes/FabricSql/transport/warmup';
 import type { FabricSqlCredentials } from '../../nodes/FabricSql/types';
 
 const credentials: FabricSqlCredentials = {

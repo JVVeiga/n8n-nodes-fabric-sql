@@ -99,7 +99,12 @@ describe('mapRecordsets', () => {
 	it('returns one item per row with the column names applied', () => {
 		const items = mapRecordsets(
 			result({
-				recordsets: [[['a', 1], ['b', 2]]],
+				recordsets: [
+					[
+						['a', 1],
+						['b', 2],
+					],
+				],
 				columns: [columns('name', 'value')],
 				rowsAffected: [2],
 			}),
@@ -112,10 +117,7 @@ describe('mapRecordsets', () => {
 	});
 
 	it('stamps pairedItem with the input index that produced the rows', () => {
-		const items = mapRecordsets(
-			result({ recordsets: [[[1]]], columns: [columns('n')] }),
-			3,
-		);
+		const items = mapRecordsets(result({ recordsets: [[[1]]], columns: [columns('n')] }), 3);
 
 		expect(items[0].pairedItem).toEqual([{ item: 3 }]);
 	});
@@ -183,19 +185,13 @@ describe('mapRecordsets', () => {
 	});
 
 	it('covers rows wider than the metadata', () => {
-		const items = mapRecordsets(
-			result({ recordsets: [[[1, 2, 3]]], columns: [columns('a')] }),
-			0,
-		);
+		const items = mapRecordsets(result({ recordsets: [[[1, 2, 3]]], columns: [columns('a')] }), 0);
 
 		expect(items[0].json).toEqual({ a: 1, column_1: 2, column_2: 3 });
 	});
 
 	it('preserves a null value rather than omitting the key', () => {
-		const items = mapRecordsets(
-			result({ recordsets: [[[null]]], columns: [columns('a')] }),
-			0,
-		);
+		const items = mapRecordsets(result({ recordsets: [[[null]]], columns: [columns('a')] }), 0);
 
 		expect(items[0].json).toEqual({ a: null });
 		expect('a' in items[0].json).toBe(true);

@@ -114,7 +114,5 @@ function leadingKeyword(masked: string): string | undefined {
 }
 
 function findForbiddenKeyword(masked: string): string | undefined {
-	return FORBIDDEN_KEYWORDS.find((keyword) =>
-		new RegExp(`\\b${keyword}\\b`, 'i').test(masked),
-	);
+	return FORBIDDEN_KEYWORDS.find((keyword) => new RegExp(`\\b${keyword}\\b`, 'i').test(masked));
 }

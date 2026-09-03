@@ -113,11 +113,7 @@ export function buildUpdate(
 }
 
 /** One `DELETE ... WHERE [match] IN (...)` per parameter chunk. */
-export function buildDelete(
-	table: string,
-	matchColumn: string,
-	values: unknown[],
-): BuiltQuery[] {
+export function buildDelete(table: string, matchColumn: string, values: unknown[]): BuiltQuery[] {
 	if (values.length === 0) {
 		return [];
 	}

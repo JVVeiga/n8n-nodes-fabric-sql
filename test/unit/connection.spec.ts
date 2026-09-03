@@ -67,9 +67,7 @@ describe('normalizeServer', () => {
 	});
 
 	it('strips both prefix and port', () => {
-		expect(normalizeServer('tcp:abc.fabric.microsoft.com,1433')).toBe(
-			'abc.fabric.microsoft.com',
-		);
+		expect(normalizeServer('tcp:abc.fabric.microsoft.com,1433')).toBe('abc.fabric.microsoft.com');
 	});
 
 	it('lowercases the host', () => {
@@ -91,9 +89,7 @@ describe('normalizeServer', () => {
 	});
 
 	it('rejects a URL', () => {
-		expect(() => normalizeServer('https://abc.fabric.microsoft.com')).toThrow(
-			/only the host name/,
-		);
+		expect(() => normalizeServer('https://abc.fabric.microsoft.com')).toThrow(/only the host name/);
 	});
 
 	it('rejects a lone semicolon-terminated value', () => {
@@ -129,8 +125,7 @@ describe('buildConnectionConfig', () => {
 
 	it('normalizes the server it was given', () => {
 		expect(
-			buildConnectionConfig({ ...credentials, server: 'tcp:ABC.fabric.microsoft.com,1433' })
-				.server,
+			buildConnectionConfig({ ...credentials, server: 'tcp:ABC.fabric.microsoft.com,1433' }).server,
 		).toBe('abc.fabric.microsoft.com');
 	});
 

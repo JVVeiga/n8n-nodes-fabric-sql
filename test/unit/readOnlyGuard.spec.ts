@@ -13,9 +13,7 @@ describe('assertReadOnly — allowed', () => {
 	});
 
 	it('allows a CTE that ends in SELECT', () => {
-		expect(() =>
-			assertReadOnly('WITH c AS (SELECT 1 AS n) SELECT n FROM c'),
-		).not.toThrow();
+		expect(() => assertReadOnly('WITH c AS (SELECT 1 AS n) SELECT n FROM c')).not.toThrow();
 	});
 
 	it('allows a parenthesised SELECT', () => {

@@ -74,6 +74,37 @@ export function coerceValue(value: unknown): unknown {
 }
 
 /**
+ * Flatten a result into plain keyed rows, values coerced and column names normalized.
+ *
+ * Separate from `mapRecordsets` because the schema operations reshape the rows into a
+ * friendlier form of their own, and a query with no rows means "no tables", not "here is a
+ * message item".
+ */
+export function toObjects(result: QueryResultLike): Array<Record<string, unknown>> {
+	const rows: Array<Record<string, unknown>> = [];
+
+	(result.recordsets ?? []).forEach((recordset, recordsetIndex) => {
+		const metadata = result.columns?.[recordsetIndex] ?? [];
+		const widest = recordset.reduce((max, row) => Math.max(max, row.length), metadata.length);
+		const names = normalizeColumnNames(
+			Array.from({ length: widest }, (_, index) => metadata[index]?.name ?? ''),
+		);
+
+		for (const row of recordset) {
+			const json: Record<string, unknown> = {};
+
+			names.forEach((name, columnIndex) => {
+				json[name] = coerceValue(row[columnIndex]);
+			});
+
+			rows.push(json);
+		}
+	});
+
+	return rows;
+}
+
+/**
  * Turn a query result into n8n items — one per row, across every recordset.
  *
  * Multiple recordsets are flattened into one stream: a workflow branch expects items, not a
@@ -81,29 +112,13 @@ export function coerceValue(value: unknown): unknown {
  * branch runs and can report what happened.
  */
 export function mapRecordsets(result: QueryResultLike, itemIndex: number): INodeExecutionData[] {
-	const items: INodeExecutionData[] = [];
-	const recordsets = result.recordsets ?? [];
+	const rows = toObjects(result);
 
-	recordsets.forEach((rows, recordsetIndex) => {
-		const metadata = result.columns?.[recordsetIndex] ?? [];
-		const widest = rows.reduce((max, row) => Math.max(max, row.length), metadata.length);
-		const names = normalizeColumnNames(
-			Array.from({ length: widest }, (_, index) => metadata[index]?.name ?? ''),
-		);
-
-		for (const row of rows) {
-			const json: IDataObject = {};
-
-			names.forEach((name, columnIndex) => {
-				json[name] = coerceValue(row[columnIndex]) as IDataObject[string];
-			});
-
-			items.push({ json, pairedItem: [{ item: itemIndex }] });
-		}
-	});
-
-	if (items.length > 0) {
-		return items;
+	if (rows.length > 0) {
+		return rows.map((json) => ({
+			json: json as IDataObject,
+			pairedItem: [{ item: itemIndex }],
+		}));
 	}
 
 	return [
